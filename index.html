@@ -220,7 +220,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v44-20260715-awaitpush"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v45-20260723-noautoghostdelete"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -648,12 +648,11 @@ async function runDriverAutoSync(){
   render();
   try{
     const result = await autoSyncTodayOrders();
-    if(result.ok && (result.newOrders || result.reassigned || result.updated || result.removed)){
+    if(result.ok && (result.newOrders || result.reassigned || result.updated)){
       const parts = [];
       if(result.newOrders) parts.push(`새 배송 ${result.newOrders}건`);
       if(result.reassigned) parts.push(`담당자 재배정 ${result.reassigned}건`);
       if(result.updated) parts.push(`내용 변경 반영 ${result.updated}건`);
-      if(result.removed) parts.push(`시트에서 사라진 건 ${result.removed}건 정리`);
       showToast(`📦 오늘자 발주요청서 반영: ${parts.join(" · ")}`);
     } else if(result.ok){
       showToast("✅ 오늘자 발주요청서 확인 완료 (새로운 건 없음)", 1800);
@@ -1034,29 +1033,16 @@ async function autoSyncTodayOrders(){
     existingBySourceKey.set(sourceKey, order);
     if(sourceNo) existingBySourceNo.set(sourceNo, order);
   }
-  // 시트에서 완전히 사라진(행 자체가 삭제된) 건은 앱에도 유령처럼 남아있으면 안 되니 정리한다.
-  // targetRows(오늘 날짜로 필터된 것)가 아니라 grid.rows 전체에서 찾는다 — 다른 날짜로
-  // 옮겨졌거나 이미 완료 처리된 행은 "존재는 하니" 삭제 대상이 아니고, 시트 자체에서
-  // 아예 못 찾을 때만(No.가 어디에도 없을 때만) 유령으로 판단해 지운다. 완료 계열
-  // 주문은 이미 끝난 기록이라 시트에서 사라졌어도 건드리지 않는다.
-  let removed = 0;
-  const removedOrderIds = [];
-  if(mapping.sourceNo>-1){
-    const allSourceNos = new Set((grid.rows||[]).map(r=>(r[mapping.sourceNo]||"").toString().trim()).filter(Boolean));
-    const before = DB.orders.length;
-    DB.orders = DB.orders.filter(o=>{
-      if(isDoneStatus(o.status) || !o.sourceNo) return true; // 완료 계열이거나 No. 없는 건 건드리지 않음
-      const keep = allSourceNos.has(o.sourceNo); // 시트에 없으면(유령) 제거
-      if(!keep) removedOrderIds.push(o.id);
-      return keep;
-    });
-    removed = before - DB.orders.length;
-  }
-  if(newOrders || newCustomers || reassigned || updated || backfilled || removed) await saveSheet();
+  // 주의: "시트에서 사라진 건 자동 삭제"(유령 데이터 정리)는 여기(로그인 시 자동동기화)에는
+  // 넣지 않는다. 이 자동경로는 사람 확인 없이 매번 조용히 실행되는데, 네트워크 상태에 따라
+  // 시트 읽기가 가끔 불완전하게 될 수 있고, 그러면 멀쩡히 있는 건을 "시트에 없다"고 착각해서
+  // 잘못 지워버릴 위험이 있다 (실제로 새로고침할 때마다 리스트가 들쭉날쭉해지는 원인이 됐었음).
+  // 유령 데이터 정리는 관리자가 "발주요청서 시트에서 바로 가져오기"로 직접 확인하면서
+  // 실행하는 수동 경로(confirm-import)에서만 한다.
+  if(newOrders || newCustomers || reassigned || updated || backfilled) await saveSheet();
   if(touchedOrders.length) await pushUpsertRecords("orders", touchedOrders);
   if(newCustomerRecords.length) await pushUpsertRecords("customers", newCustomerRecords);
-  if(removedOrderIds.length) await pushDeleteRecords("orders", removedOrderIds);
-  return { ok:true, newOrders, newCustomers, reassigned, updated, removed };
+  return { ok:true, newOrders, newCustomers, reassigned, updated };
 }
 
 /* ================= RENDER ================= */
