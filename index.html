@@ -220,7 +220,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v53-20260723-403bodylog"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v54-20260723-customersync"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -826,11 +826,12 @@ async function runDriverAutoSync(){
   render();
   try{
     const result = await autoSyncTodayOrders();
-    if(result.ok && (result.newOrders || result.reassigned || result.updated)){
+    if(result.ok && (result.newOrders || result.reassigned || result.updated || result.customersUpdated)){
       const parts = [];
       if(result.newOrders) parts.push(`새 배송 ${result.newOrders}건`);
       if(result.reassigned) parts.push(`담당자 재배정 ${result.reassigned}건`);
       if(result.updated) parts.push(`내용 변경 반영 ${result.updated}건`);
+      if(result.customersUpdated) parts.push(`거래처 정보 ${result.customersUpdated}건 갱신`);
       showToast(`📦 오늘자 발주요청서 반영: ${parts.join(" · ")}`);
     } else if(result.ok){
       showToast("✅ 오늘자 발주요청서 확인 완료 (새로운 건 없음)", 1800);
@@ -1151,9 +1152,10 @@ async function autoSyncTodayOrders(){
   const existingBySourceNo = new Map(DB.orders.filter(o=>o.sourceNo).map(o=>[o.sourceNo, o]));
   // No.가 없는 아주 오래된 레거시 주문을 위한 예전 방식 보조 매칭.
   const existingBySourceKey = new Map(DB.orders.filter(o=>o.sourceKey).map(o=>[o.sourceKey, o]));
-  let newOrders=0, newCustomers=0, reassigned=0, updated=0, backfilled=0;
+  let newOrders=0, newCustomers=0, reassigned=0, updated=0, backfilled=0, customersUpdated=0;
   const touchedOrders = []; // 새로 만들었거나 내용이 바뀐 주문들 — 이것만 서버에 콕 집어 반영
   const newCustomerRecords = [];
+  const touchedCustomers = []; // 새로 만들었거나 주소/연락처 등이 갱신된 거래처
   for(const r of targetRows){
     const name = (r[mapping.customerName]||"").toString().trim();
     const address = (r[mapping.address]||"").toString().trim();
@@ -1166,6 +1168,32 @@ async function autoSyncTodayOrders(){
     const sourceKey = importSourceKey(name, category, qtyText, orderDate);
     const driverIds = mapping.driverAssign>-1 ? resolveDriverIdsFromRaw(r[mapping.driverAssign]) : DB.users.filter(u=>u.role==="driver").map(u=>u.id);
     const sourceNo = mapping.sourceNo>-1 ? (r[mapping.sourceNo]||"").toString().trim() : "";
+
+    // 거래처는 주문이 새 건이든 이미 있는 건이든 상관없이 매번 확인한다 — 시트에서
+    // 주소/연락처/유형을 나중에 고치면, 이미 등록된 거래처도 따라가도록 하기 위함.
+    let c = DB.customers.find(x=>x.name.trim()===name);
+    if(!c){
+      c = { id:uid("cust"), name, type:(mapping.type>-1 ? (r[mapping.type]||"납품").toString().trim() : "납품"),
+        address, phone: mapping.phone>-1 ? (r[mapping.phone]||"").toString().trim() : "", notes:[] };
+      DB.customers.push(c); newCustomers++; newCustomerRecords.push(c);
+    } else {
+      let custChanged = false;
+      if(address && c.address!==address){
+        c.address = address;
+        delete c.lat; delete c.lng; // 주소가 바뀌면 캐시된 위치도 지워서 다시 계산되게 함
+        custChanged = true;
+      }
+      if(mapping.phone>-1){
+        const phone = (r[mapping.phone]||"").toString().trim();
+        if(phone && c.phone!==phone){ c.phone = phone; custChanged = true; }
+      }
+      if(mapping.type>-1){
+        const type = (r[mapping.type]||"").toString().trim();
+        if(type && c.type!==type){ c.type = type; custChanged = true; }
+      }
+      if(custChanged){ customersUpdated++; touchedCustomers.push(c); }
+    }
+
     const existing = (sourceNo && existingBySourceNo.get(sourceNo)) || existingBySourceKey.get(sourceKey);
     // 배정된 기사 중 이미 오늘 운행을 시작한 사람이 있으면, 이 건도 "대기"로 두지 않고
     // "배송중"으로 맞춰준다 — 운행시작 버튼은 누른 그 순간의 건만 일괄전환하기 때문에,
@@ -1192,12 +1220,6 @@ async function autoSyncTodayOrders(){
       if(!existing.sourceNo && sourceNo){ existing.sourceNo = sourceNo; backfilled++; existingBySourceNo.set(sourceNo, existing); if(!touchedOrders.includes(existing)) touchedOrders.push(existing); }
       continue;
     }
-    let c = DB.customers.find(x=>x.name.trim()===name);
-    if(!c){
-      c = { id:uid("cust"), name, type:(mapping.type>-1 ? (r[mapping.type]||"납품").toString().trim() : "납품"),
-        address, phone: mapping.phone>-1 ? (r[mapping.phone]||"").toString().trim() : "", notes:[] };
-      DB.customers.push(c); newCustomers++; newCustomerRecords.push(c);
-    }
     const primaryDriver = DB.users.find(u=>u.id===driverIds[0]);
     const order = {
       id: uid("order"), customerId: c.id, category, qty: qtyText,
@@ -1217,10 +1239,11 @@ async function autoSyncTodayOrders(){
   // 잘못 지워버릴 위험이 있다 (실제로 새로고침할 때마다 리스트가 들쭉날쭉해지는 원인이 됐었음).
   // 유령 데이터 정리는 관리자가 "발주요청서 시트에서 바로 가져오기"로 직접 확인하면서
   // 실행하는 수동 경로(confirm-import)에서만 한다.
-  if(newOrders || newCustomers || reassigned || updated || backfilled) await saveSheet();
+  if(newOrders || newCustomers || reassigned || updated || backfilled || customersUpdated) await saveSheet();
   if(touchedOrders.length) await pushUpsertRecords("orders", touchedOrders);
   if(newCustomerRecords.length) await pushUpsertRecords("customers", newCustomerRecords);
-  return { ok:true, newOrders, newCustomers, reassigned, updated };
+  if(touchedCustomers.length) await pushUpsertRecords("customers", touchedCustomers);
+  return { ok:true, newOrders, newCustomers, reassigned, updated, customersUpdated };
 }
 
 /* ================= RENDER ================= */
@@ -1703,6 +1726,7 @@ async function renderCustomerProfile(){
         <a class="iconbtn plain" href="tel:${c.phone}" title="전화">📞</a>
         <a class="iconbtn plain" href="sms:${c.phone}" title="문자">💬</a>
         <a class="iconbtn plain" target="_blank" rel="noopener" href="https://map.kakao.com/link/search/${encodeURIComponent(c.address)}" title="지도">🗺️</a>
+        <button class="iconbtn" data-action="open-edit-customer" data-id="${c.id}" title="수정">✏️</button>
       </div>
     </div>
     <div class="section-title">거래처 메모 <button class="hairline-btn" data-action="open-add-note-profile">+ 메모 추가</button></div>
@@ -2157,6 +2181,17 @@ function renderModal(){
     <div class="modal-head"><div class="modal-title">배송 정보 수정</div><button class="modal-close" data-action="close-modal">✕</button></div>
     <div class="small muted" style="line-height:1.6;">배송 수량·중량 등 상세 정보 수정은 발주요청서 원본 시트 연동 후 지원될 예정입니다. 지금은 상태 변경 및 메모 기능을 이용해주세요.</div>
     <button class="btn btn-ghost" data-action="close-modal" style="margin-top:14px;">닫기</button>`;
+  } else if(m.type==="customer-form"){
+    const cu = DB.customers.find(x=>x.id===m.customerId);
+    if(!cu){ content = `<div class="small muted">거래처를 찾을 수 없습니다.</div><button class="btn btn-ghost" data-action="close-modal" style="margin-top:14px;">닫기</button>`; }
+    else content = `
+    <div class="modal-head"><div class="modal-title">거래처 정보 수정</div><button class="modal-close" data-action="close-modal">✕</button></div>
+    <div class="small muted" style="margin-bottom:10px;">여기서 고친 내용은 다음 발주요청서 동기화 때 시트 내용으로 다시 덮어써질 수 있어요. 급하게 하나만 고칠 때 쓰고, 계속 유지하려면 원본 시트도 같이 고쳐주세요.</div>
+    <div class="field"><label>거래처명</label><input type="text" id="mo-cust-name" value="${escapeHtml(cu.name)}"/></div>
+    <div class="field"><label>유형</label><input type="text" id="mo-cust-type" value="${escapeHtml(cu.type)}" placeholder="예: 납품/지원/회수"/></div>
+    <div class="field"><label>주소</label><input type="text" id="mo-cust-address" value="${escapeHtml(cu.address)}"/></div>
+    <div class="field"><label>연락처</label><input type="text" id="mo-cust-phone" value="${escapeHtml(cu.phone)}"/></div>
+    <button class="btn btn-accent" data-action="confirm-customer-form" data-id="${cu.id}">저장</button>`;
   }
   return `<div class="modal-backdrop" data-action="backdrop">
     <div class="modal-sheet" onclick="event.stopPropagation()">${content}</div>
@@ -2323,9 +2358,10 @@ function bindGlobal(){
       // 다른 건으로 착각해 예전 것은 유령처럼 남고 중복이 생겼었다).
       const existingBySourceNo = new Map(DB.orders.filter(o=>o.sourceNo).map(o=>[o.sourceNo, o]));
       const existingBySourceKey = new Map(DB.orders.filter(o=>o.sourceKey).map(o=>[o.sourceKey, o])); // No. 없는 레거시 건 보조 매칭
-      let newCustomers=0, newOrders=0, dupSkipped=0, reassigned=0, updated=0;
+      let newCustomers=0, newOrders=0, dupSkipped=0, reassigned=0, updated=0, customersUpdated=0;
       const touchedOrders = []; // 새로 만들었거나 내용이 바뀐 주문들 — 이것만 서버에 콕 집어 반영
       const newCustomerRecords = [];
+      const touchedCustomers = []; // 새로 만들었거나 주소/연락처 등이 갱신된 거래처
       for(const r of targetRows){
         const name = (r[mapping.customerName]||"").toString().trim();
         const address = (r[mapping.address]||"").toString().trim();
@@ -2339,6 +2375,32 @@ function bindGlobal(){
           ? resolveDriverIdsFromRaw(r[mapping.driverAssign])
           : [driver.id];
         const sourceNo = mapping.sourceNo>-1 ? (r[mapping.sourceNo]||"").toString().trim() : "";
+
+        // 거래처는 주문이 새 건이든 이미 있는 건이든 상관없이 매번 확인한다 — 시트에서
+        // 주소/연락처/유형을 나중에 고치면, 이미 등록된 거래처도 따라가도록 하기 위함.
+        let c = DB.customers.find(x=>x.name.trim()===name);
+        if(!c){
+          c = { id:uid("cust"), name, type:(mapping.type>-1 ? (r[mapping.type]||"납품").toString().trim() : "납품"),
+            address, phone: mapping.phone>-1 ? (r[mapping.phone]||"").toString().trim() : "", notes:[] };
+          DB.customers.push(c); newCustomers++; newCustomerRecords.push(c);
+        } else {
+          let custChanged = false;
+          if(address && c.address!==address){
+            c.address = address;
+            delete c.lat; delete c.lng; // 주소가 바뀌면 캐시된 위치도 지워서 다시 계산되게 함
+            custChanged = true;
+          }
+          if(mapping.phone>-1){
+            const phone = (r[mapping.phone]||"").toString().trim();
+            if(phone && c.phone!==phone){ c.phone = phone; custChanged = true; }
+          }
+          if(mapping.type>-1){
+            const type = (r[mapping.type]||"").toString().trim();
+            if(type && c.type!==type){ c.type = type; custChanged = true; }
+          }
+          if(custChanged){ customersUpdated++; touchedCustomers.push(c); }
+        }
+
         const existing = (sourceNo && existingBySourceNo.get(sourceNo)) || existingBySourceKey.get(sourceKey);
         // 배정된 기사 중 이미 오늘 운행을 시작한 사람이 있으면 대기로 두지 않고 배송중으로 맞춘다.
         const shouldBeInTransit = orderDate===today && anyDriverHasActiveTrip(driverIds);
@@ -2361,12 +2423,6 @@ function bindGlobal(){
           if(changed){ updated++; touchedOrders.push(existing); } else dupSkipped++;
           if(!existing.sourceNo && sourceNo){ existing.sourceNo = sourceNo; existingBySourceNo.set(sourceNo, existing); if(!touchedOrders.includes(existing)) touchedOrders.push(existing); }
           continue;
-        }
-        let c = DB.customers.find(x=>x.name.trim()===name);
-        if(!c){
-          c = { id:uid("cust"), name, type:(mapping.type>-1 ? (r[mapping.type]||"납품").toString().trim() : "납품"),
-            address, phone: mapping.phone>-1 ? (r[mapping.phone]||"").toString().trim() : "", notes:[] };
-          DB.customers.push(c); newCustomers++; newCustomerRecords.push(c);
         }
         const order = {
           id: uid("order"), customerId: c.id,
@@ -2401,9 +2457,10 @@ function bindGlobal(){
       await saveSheet();
       if(touchedOrders.length) await pushUpsertRecords("orders", touchedOrders);
       if(newCustomerRecords.length) await pushUpsertRecords("customers", newCustomerRecords);
+      if(touchedCustomers.length) await pushUpsertRecords("customers", touchedCustomers);
       if(removedOrderIds.length) await pushDeleteRecords("orders", removedOrderIds);
       state.importData = null; state.view="admin";
-      showToast(`가져오기 완료: 거래처 ${newCustomers}건 추가, 배송 ${newOrders}건 등록${reassigned?` · ${reassigned}건 담당자 재배정`:""}${updated?` · ${updated}건 내용 변경 반영`:""}${removed?` · 시트에서 사라진 건 ${removed}건 정리`:""}${skippedTotal?` · ${skippedTotal}건 건너뜀(필터 조건에 안 맞음)`:""}${dupSkipped?` · ${dupSkipped}건 변경없음`:""}`);
+      showToast(`가져오기 완료: 거래처 ${newCustomers}건 추가, 배송 ${newOrders}건 등록${reassigned?` · ${reassigned}건 담당자 재배정`:""}${updated?` · ${updated}건 내용 변경 반영`:""}${customersUpdated?` · 거래처 정보 ${customersUpdated}건 갱신`:""}${removed?` · 시트에서 사라진 건 ${removed}건 정리`:""}${skippedTotal?` · ${skippedTotal}건 건너뜀(필터 조건에 안 맞음)`:""}${dupSkipped?` · ${dupSkipped}건 변경없음`:""}`);
       render();
     }; }
     if(action==="save-gsheet-url"){ el.onclick = async ()=>{
@@ -2427,6 +2484,23 @@ function bindGlobal(){
       addMaintLog({part, odometer, intervalKm, memo});
     }; }
     if(action==="open-edit-order"){ el.onclick = ()=>{ state.modal={type:"edit-order"}; render(); }; }
+    if(action==="open-edit-customer"){ el.onclick = ()=>{ state.modal={type:"customer-form", customerId: el.dataset.id}; render(); }; }
+    if(action==="confirm-customer-form"){ el.onclick = async ()=>{
+      const cu = DB.customers.find(x=>x.id===el.dataset.id);
+      if(!cu) return;
+      const name = document.getElementById("mo-cust-name").value.trim();
+      const type = document.getElementById("mo-cust-type").value.trim();
+      const address = document.getElementById("mo-cust-address").value.trim();
+      const phone = document.getElementById("mo-cust-phone").value.trim();
+      if(!name || !address){ showToast("거래처명과 주소는 필수입니다."); return; }
+      if(cu.address!==address){ delete cu.lat; delete cu.lng; } // 주소가 바뀌면 캐시된 위치도 지워서 다시 계산되게 함
+      cu.name = name; cu.type = type; cu.address = address; cu.phone = phone;
+      await saveSheet();
+      await pushUpsertRecords("customers", [cu]);
+      state.modal = null;
+      showToast("거래처 정보가 수정되었습니다.");
+      render();
+    }; }
     if(action==="close-modal"){ el.onclick = ()=>{ state.modal=null; render(); }; }
     if(action==="backdrop"){ el.onclick = (e)=>{ if(e.target===el){ state.modal=null; render(); } }; }
     if(action==="set-status"){ el.onclick = ()=>{ setOrderStatus(state.selectedOrderId, el.dataset.status); }; }
