@@ -220,7 +220,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v50-20260723-geocodetimeout"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v51-20260723-pushtimeout"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -978,11 +978,11 @@ async function pushSourceStatusUpdates(updates){
   const url = DB.config.gsheetUrl;
   if(!url) return;
   try{
-    await fetch(url, {
+    await fetchWithTimeout(url, {
       method:"POST",
       headers:{ "Content-Type":"text/plain;charset=utf-8" },
       body: JSON.stringify({ action:"updateSourceStatus", updates }),
-    });
+    }, 15000);
   }catch(e){
     console.warn("원본 시트 배송 상태 반영 요청의 응답을 읽지 못했습니다(교차 출처라 정상일 수 있음):", e.message);
   }
@@ -996,11 +996,11 @@ async function pushUpsertRecords(sheetName, records, idField){
   const url = DB.config.gsheetUrl;
   if(!url || HAS_CLAUDE_STORAGE) return;
   try{
-    await fetch(url, {
+    await fetchWithTimeout(url, {
       method:"POST",
       headers:{ "Content-Type":"text/plain;charset=utf-8" },
       body: JSON.stringify({ action:"upsertRecords", sheet:sheetName, idField: idField||"id", records }),
-    });
+    }, 15000);
   }catch(e){
     console.warn(`${sheetName} 레코드 반영 요청의 응답을 읽지 못했습니다(교차 출처라 정상일 수 있음):`, e.message);
   }
@@ -1011,11 +1011,11 @@ async function pushDeleteRecords(sheetName, ids, idField){
   const url = DB.config.gsheetUrl;
   if(!url || HAS_CLAUDE_STORAGE) return;
   try{
-    await fetch(url, {
+    await fetchWithTimeout(url, {
       method:"POST",
       headers:{ "Content-Type":"text/plain;charset=utf-8" },
       body: JSON.stringify({ action:"deleteRecords", sheet:sheetName, idField: idField||"id", ids }),
-    });
+    }, 15000);
   }catch(e){
     console.warn(`${sheetName} 레코드 삭제 요청의 응답을 읽지 못했습니다(교차 출처라 정상일 수 있음):`, e.message);
   }
@@ -1028,11 +1028,11 @@ async function pushFullReplaceSheet(sheetName, records){
   if(!url || HAS_CLAUDE_STORAGE) return;
   const data = {}; data[sheetName] = records;
   try{
-    await fetch(url, {
+    await fetchWithTimeout(url, {
       method:"POST",
       headers:{ "Content-Type":"text/plain;charset=utf-8" },
       body: JSON.stringify({ action:"push", data }),
-    });
+    }, 20000);
   }catch(e){
     console.warn(`${sheetName} 전체 재설정 요청의 응답을 읽지 못했습니다(교차 출처라 정상일 수 있음):`, e.message);
   }
