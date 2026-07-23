@@ -220,7 +220,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v51-20260723-pushtimeout"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v52-20260723-geocodedebugtool"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -336,6 +336,61 @@ async function geocodeAddress(address){
     }catch(e){ console.warn("카카오 키워드검색 실패(계속 진행):", e.message); }
   }
   return null;
+}
+// 진단용: geocodeAddress와 똑같이 시도하되, 각 후보/각 단계에서 실제로 무슨 응답이
+// 왔는지 전부 기록해서 화면에 보여준다. 왜 특정 주소가 실패하거나 엉뚱하게 매칭되는지
+// 직접 눈으로 확인할 때 쓴다.
+async function geocodeAddressDebug(address){
+  const log = [];
+  if(!address || !KAKAO_REST_API_KEY){ log.push("주소가 비어있거나 API 키가 없습니다."); return { result:null, log }; }
+  const candidates = buildAddressCandidates(address);
+  log.push(`시도할 후보 주소 (${candidates.length}개): ${candidates.map(c=>`"${c}"`).join(" / ")}`);
+
+  for(const cand of candidates){
+    try{
+      const res = await fetchWithTimeout(`https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(cand)}`, {
+        headers: { Authorization: `KakaoAK ${KAKAO_REST_API_KEY}` }
+      });
+      log.push(`[주소검색] "${cand}" -> HTTP ${res.status}`);
+      if(res.ok){
+        const data = await res.json();
+        const n = (data.documents||[]).length;
+        log.push(`  결과 ${n}건${n?`, 1순위: "${data.documents[0].address_name}" (${data.documents[0].y}, ${data.documents[0].x})`:""}`);
+        if(n){
+          const d = data.documents[0];
+          const pass = regionSanityCheck(address, d.address_name);
+          log.push(`  지역 검증(${address.trim().split(/\s+/)[0]} 포함 여부): ${pass ? "통과 -> 이 결과 채택" : "불일치 -> 버리고 다음 후보 시도"}`);
+          if(pass) return { result:{ lat: parseFloat(d.y), lng: parseFloat(d.x) }, log };
+        }
+      } else {
+        log.push(`  응답 실패 (status ${res.status})`);
+      }
+    }catch(e){ log.push(`  에러: ${e.message}`); }
+  }
+  for(const cand of candidates){
+    try{
+      const res2 = await fetchWithTimeout(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(cand)}`, {
+        headers: { Authorization: `KakaoAK ${KAKAO_REST_API_KEY}` }
+      });
+      log.push(`[키워드검색] "${cand}" -> HTTP ${res2.status}`);
+      if(res2.ok){
+        const data2 = await res2.json();
+        const n = (data2.documents||[]).length;
+        log.push(`  결과 ${n}건${n?`, 1순위: "${data2.documents[0].address_name||data2.documents[0].place_name}" (${data2.documents[0].y}, ${data2.documents[0].x})`:""}`);
+        if(n){
+          const d = data2.documents[0];
+          const addrText = d.address_name || d.road_address_name || "";
+          const pass = regionSanityCheck(address, addrText);
+          log.push(`  지역 검증: ${pass ? "통과 -> 이 결과 채택" : "불일치 -> 버리고 다음 후보 시도"}`);
+          if(pass) return { result:{ lat: parseFloat(d.y), lng: parseFloat(d.x) }, log };
+        }
+      } else {
+        log.push(`  응답 실패 (status ${res2.status})`);
+      }
+    }catch(e){ log.push(`  에러: ${e.message}`); }
+  }
+  log.push("모든 후보 실패 -> null 반환 (구 단위 대략치로 대체됨)");
+  return { result:null, log };
 }
 // 화면에 나올 거래처들 중 좌표가 아직 캐시 안 된 것들을 지오코딩해서 거래처 레코드에
 // 저장해둔다 — 한 번 저장되면 다음부턴 API를 다시 안 부르고 캐시를 쓴다.
@@ -1722,6 +1777,12 @@ async function renderAdmin(){
       </div>
       <button class="btn btn-danger btn-sm" style="width:100%;" data-action="reset-orders">⚠️ 배송 데이터 초기화 (테스트 중 꼬인 데이터 정리용)</button>
       <button class="btn btn-ghost btn-sm" style="width:100%;" data-action="reset-geocode-cache">📍 거래처 위치 캐시 초기화 (거리계산 다시 하기)</button>
+      <div class="card small" style="margin-top:4px;">
+        <div class="bold tiny faint" style="margin-bottom:6px;">🧪 주소 지오코딩 테스트 (진단용)</div>
+        <input id="geo-test-address" type="text" placeholder="테스트할 주소 입력" style="width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid var(--line-strong);font-size:13px;margin-bottom:6px;"/>
+        <button class="btn btn-ghost btn-sm" style="width:100%;" data-action="test-geocode">테스트 실행</button>
+        <div id="geo-test-result" class="tiny faint" style="margin-top:8px;white-space:pre-wrap;"></div>
+      </div>
     </div>
     <div class="admin-grid">
       <div class="admin-stat"><div class="num">${viewOrders.length}</div><div class="lab">${viewDate===today?"오늘":escapeHtml(viewDate)} 총 배송</div></div>
@@ -2215,6 +2276,20 @@ function bindGlobal(){
       await pushUpsertRecords("customers", DB.customers);
       showToast("위치 캐시를 초기화했습니다. 배송 리스트나 거래처 화면을 열면 자동으로 다시 계산됩니다.");
       render();
+    }; }
+    if(action==="test-geocode"){ el.onclick = async ()=>{
+      const input = document.getElementById("geo-test-address");
+      const resultBox = document.getElementById("geo-test-result");
+      const address = input ? input.value.trim() : "";
+      if(!address){ showToast("테스트할 주소를 입력해주세요."); return; }
+      if(resultBox) resultBox.textContent = "테스트 중...";
+      const { result, log } = await geocodeAddressDebug(address);
+      if(resultBox){
+        const summary = result
+          ? `✅ 최종 결과: 위도 ${result.lat}, 경도 ${result.lng} (창고 기준 ${haversine(WAREHOUSE.lat,WAREHOUSE.lng,result.lat,result.lng).toFixed(1)}km)`
+          : `❌ 최종 결과: 못 찾음 (구 단위 대략치로 대체됨)`;
+        resultBox.textContent = summary + "\n\n" + log.join("\n");
+      }
     }; }
     if(action==="cancel-import"){ el.onclick = ()=>{ state.importData=null; state.view="admin"; render(); }; }
     if(action==="confirm-import"){ el.onclick = async ()=>{
