@@ -220,7 +220,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v49-20260723-geocodesanitycheck"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v50-20260723-geocodetimeout"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -289,13 +289,24 @@ function regionSanityCheck(originalAddress, resultAddressName){
   if(!firstToken) return true;
   return resultAddressName.includes(firstToken);
 }
+// fetch에 타임아웃을 걸어서, 네트워크가 응답 없이 멈춰있어도 무한정 기다리지 않게 한다.
+// (이게 없으면 지오코딩 하나가 걸릴 때 화면 전환 자체가 멈춘 것처럼 보일 수 있었다)
+async function fetchWithTimeout(url, options, timeoutMs=6000){
+  const controller = new AbortController();
+  const timer = setTimeout(()=>controller.abort(), timeoutMs);
+  try{
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
 async function geocodeAddress(address){
   if(!address || !KAKAO_REST_API_KEY) return null;
   const candidates = buildAddressCandidates(address);
-  try{
-    // 짧고 깨끗한 주소부터 순서대로 도로명/지번 주소 검색을 시도한다.
-    for(const cand of candidates){
-      const res = await fetch(`https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(cand)}`, {
+  // 짧고 깨끗한 주소부터 순서대로 도로명/지번 주소 검색을 시도한다.
+  for(const cand of candidates){
+    try{
+      const res = await fetchWithTimeout(`https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(cand)}`, {
         headers: { Authorization: `KakaoAK ${KAKAO_REST_API_KEY}` }
       });
       if(res.ok){
@@ -305,11 +316,13 @@ async function geocodeAddress(address){
           if(regionSanityCheck(address, d.address_name)) return { lat: parseFloat(d.y), lng: parseFloat(d.x) };
         }
       }
-    }
-    // 도로명/지번 주소 검색으로 다 못 찾으면(건물명 위주 주소 등) 키워드 검색으로 시도한다.
-    // 짧은 후보(건물명이 남아있을 가능성이 있는 것)부터 원본까지 순서대로 시도.
-    for(const cand of candidates){
-      const res2 = await fetch(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(cand)}`, {
+    }catch(e){ console.warn("카카오 주소검색 실패(계속 진행):", e.message); }
+  }
+  // 도로명/지번 주소 검색으로 다 못 찾으면(건물명 위주 주소 등) 키워드 검색으로 시도한다.
+  // 짧은 후보(건물명이 남아있을 가능성이 있는 것)부터 원본까지 순서대로 시도.
+  for(const cand of candidates){
+    try{
+      const res2 = await fetchWithTimeout(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(cand)}`, {
         headers: { Authorization: `KakaoAK ${KAKAO_REST_API_KEY}` }
       });
       if(res2.ok){
@@ -320,9 +333,7 @@ async function geocodeAddress(address){
           if(regionSanityCheck(address, addrText)) return { lat: parseFloat(d.y), lng: parseFloat(d.x) };
         }
       }
-    }
-  }catch(e){
-    console.warn("카카오 지오코딩 실패:", e.message);
+    }catch(e){ console.warn("카카오 키워드검색 실패(계속 진행):", e.message); }
   }
   return null;
 }
