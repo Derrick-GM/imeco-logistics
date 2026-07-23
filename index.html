@@ -220,7 +220,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v45-20260723-noautoghostdelete"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v46-20260723-donedatefix"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -1255,7 +1255,10 @@ async function renderHome(){
   for(const o of recentDoneAll.slice(0,8)){
     const c = await getCustomer(o.customerId);
     const dt = new Date(o.completedDate);
-    const dateLabel = o.date===todayStr() ? dt.toLocaleTimeString("ko-KR",{hour:'2-digit',minute:'2-digit'}) : `${o.date} ${dt.toLocaleTimeString("ko-KR",{hour:'2-digit',minute:'2-digit'})}`;
+    // 완료 시각의 "날짜"도 실제 완료일(completedDate) 기준으로 봐야 한다 — 배정일(o.date)이랑
+    // 완료된 날이 다를 수 있는데, 예전엔 배정일 + 완료 시각을 섞어서 보여줘서 날짜가 안 맞았었다.
+    const completedDateStr = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
+    const dateLabel = completedDateStr===todayStr() ? dt.toLocaleTimeString("ko-KR",{hour:'2-digit',minute:'2-digit'}) : `${completedDateStr} ${dt.toLocaleTimeString("ko-KR",{hour:'2-digit',minute:'2-digit'})}`;
     doneMini += `<div class="mini-done-item" data-action="open-detail" data-id="${o.id}" style="cursor:pointer;">
       <span>${escapeHtml(c? c.name:"-")} <span class="tiny faint">(${escapeHtml(o.status)})</span></span>
       <span>${escapeHtml(dateLabel)}</span>
