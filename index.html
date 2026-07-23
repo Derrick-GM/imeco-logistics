@@ -220,13 +220,13 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v52-20260723-geocodedebugtool"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v53-20260723-403bodylog"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
 const DISTRICT_COORDS = [
   ["송파구",37.5145,127.1055],["강남구",37.5172,127.0473],["강동구",37.5301,127.1238],
-  ["서초구",37.4837,127.0324],["중구",37.5636,126.9976],["종로구",37.5735,126.9788],
+  ["서초구",37.4837,127.0324],["서울 중구",37.5636,126.9976],["종로구",37.5735,126.9788],
   ["영등포구",37.5264,126.8963],["마포구",37.5663,126.9019],["용산구",37.5324,126.9903],
   ["성동구",37.5633,127.0367],["광진구",37.5384,127.0822],["강서구",37.5509,126.8495],
   ["분당구",37.3826,127.1191],["수정구",37.4507,127.1489],["중원구",37.4364,127.1379],
@@ -363,7 +363,9 @@ async function geocodeAddressDebug(address){
           if(pass) return { result:{ lat: parseFloat(d.y), lng: parseFloat(d.x) }, log };
         }
       } else {
-        log.push(`  응답 실패 (status ${res.status})`);
+        let bodyText = "";
+        try{ bodyText = await res.text(); }catch(e2){}
+        log.push(`  응답 실패 (status ${res.status}) 본문: ${bodyText.slice(0,300)}`);
       }
     }catch(e){ log.push(`  에러: ${e.message}`); }
   }
@@ -385,7 +387,9 @@ async function geocodeAddressDebug(address){
           if(pass) return { result:{ lat: parseFloat(d.y), lng: parseFloat(d.x) }, log };
         }
       } else {
-        log.push(`  응답 실패 (status ${res2.status})`);
+        let bodyText2 = "";
+        try{ bodyText2 = await res2.text(); }catch(e2){}
+        log.push(`  응답 실패 (status ${res2.status}) 본문: ${bodyText2.slice(0,300)}`);
       }
     }catch(e){ log.push(`  에러: ${e.message}`); }
   }
