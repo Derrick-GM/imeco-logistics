@@ -220,7 +220,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v46-20260723-donedatefix"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v47-20260723-kakaogeocoding"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -245,6 +245,64 @@ function distFromWarehouse(address){
   if(!hit) return null;
   const [,lat,lng]=hit;
   return haversine(WAREHOUSE.lat,WAREHOUSE.lng,lat,lng);
+}
+// 카카오 로컬 API로 주소를 실제 좌표로 변환(지오코딩)한다. 이게 되면 위의 구 단위 대략적
+// 거리 대신 정확한 직선거리를 계산할 수 있다. 앱 대표 도메인에 이 사이트 주소가 등록돼
+// 있어야 브라우저에서 바로 호출 가능하다 (교차출처 허용).
+const KAKAO_REST_API_KEY = "c98ad5b9fb6491ac7ee0f060b650015f";
+async function geocodeAddress(address){
+  if(!address || !KAKAO_REST_API_KEY) return null;
+  try{
+    const res = await fetch(`https://dapi.kakao.com/v2/local/search/address.json?query=${encodeURIComponent(address)}`, {
+      headers: { Authorization: `KakaoAK ${KAKAO_REST_API_KEY}` }
+    });
+    if(res.ok){
+      const data = await res.json();
+      if(data.documents && data.documents.length){
+        const d = data.documents[0];
+        return { lat: parseFloat(d.y), lng: parseFloat(d.x) };
+      }
+    }
+    // 도로명/지번 주소 검색으로 못 찾으면(건물명이 섞여 있는 경우 등) 키워드 검색으로 한 번 더 시도
+    const res2 = await fetch(`https://dapi.kakao.com/v2/local/search/keyword.json?query=${encodeURIComponent(address)}`, {
+      headers: { Authorization: `KakaoAK ${KAKAO_REST_API_KEY}` }
+    });
+    if(res2.ok){
+      const data2 = await res2.json();
+      if(data2.documents && data2.documents.length){
+        const d = data2.documents[0];
+        return { lat: parseFloat(d.y), lng: parseFloat(d.x) };
+      }
+    }
+  }catch(e){
+    console.warn("카카오 지오코딩 실패:", e.message);
+  }
+  return null;
+}
+// 화면에 나올 거래처들 중 좌표가 아직 캐시 안 된 것들을 한 번에(병렬로) 지오코딩해서
+// 거래처 레코드에 저장해둔다 — 한 번 저장되면 다음부턴 API를 다시 안 부르고 캐시를 쓴다.
+// 원격 반영은 느긋하게(await 안 함) 처리한다 — 실패해도 거리 표시만 다음 동기화 때까지
+// 대략치로 보일 뿐 업무에 지장이 없는 낮은 위험의 캐시라서, 매 렌더링을 늦출 필요는 없다.
+async function ensureCustomersGeocoded(customers){
+  const targets = customers.filter(c=>c && c.address && !(typeof c.lat==="number" && typeof c.lng==="number"));
+  if(!targets.length) return;
+  await Promise.all(targets.map(async c=>{
+    const result = await geocodeAddress(c.address);
+    if(result){ c.lat = result.lat; c.lng = result.lng; }
+  }));
+  const geocoded = targets.filter(c=>typeof c.lat==="number");
+  if(geocoded.length){
+    await saveSheet(); // 로컬 캐시 저장
+    pushUpsertRecords("customers", geocoded); // 원격 캐시 반영은 느긋하게
+  }
+}
+// 카카오로 지오코딩된 좌표가 있으면 그걸로 정확한 직선거리를, 없으면(아직 캐시 안 됐거나
+// 지오코딩 실패) 기존 구 단위 대략적 거리로 대체한다.
+function distFromWarehouseCustomer(c){
+  if(c && typeof c.lat==="number" && typeof c.lng==="number"){
+    return haversine(WAREHOUSE.lat, WAREHOUSE.lng, c.lat, c.lng);
+  }
+  return distFromWarehouse(c ? c.address : "");
 }
 function districtLatLng(address){
   const hit = DISTRICT_COORDS.find(([name])=>address.includes(name));
@@ -1198,6 +1256,11 @@ async function renderHome(){
   const cats = {};
   activeOrders.forEach(o=>{ (cats[o.category] = cats[o.category]||[]).push(o); });
 
+  // 카드를 그리기 전에, 오늘 화면에 나올 거래처들 좌표를 한 번에(병렬로) 지오코딩해둔다.
+  const homeCustomers = [];
+  for(const o of activeOrders){ const c = await getCustomer(o.customerId); if(c) homeCustomers.push(c); }
+  await ensureCustomersGeocoded(homeCustomers);
+
   let listHtml = "";
   for(const [cat, items] of Object.entries(cats)){
     const icon = cat.includes("2L") ? "🧴" : cat.includes("미네랄") ? "🚰" : "💧";
@@ -1205,7 +1268,7 @@ async function renderHome(){
     for(const o of items){
       const c = await getCustomer(o.customerId);
       if(!c) continue;
-      const dist = distFromWarehouse(c.address);
+      const dist = distFromWarehouseCustomer(c);
       const late = !isDoneStatus(o.status) && o.dueDate < todayStr();
       const coAssigned = (o.driverIds||[]).length>1;
       const statusBadge = isDoneStatus(o.status) ? `<span class="badge badge-done">${escapeHtml(o.status)}</span>`
@@ -1334,7 +1397,8 @@ async function renderDetail(){
   if(!o) { state.view="home"; return renderHome(); }
   const c = await getCustomer(o.customerId);
   const u = state.currentUser;
-  const dist = distFromWarehouse(c.address);
+  await ensureCustomersGeocoded([c]);
+  const dist = distFromWarehouseCustomer(c);
   const late = !isDoneStatus(o.status) && o.dueDate < todayStr();
 
   const notesHtml = renderNotesList(c.notes);
@@ -1470,7 +1534,7 @@ async function renderProfile(){
 
 /* ---- CUSTOMER SEARCH ---- */
 function customerCardHtml(c){
-  const dist = distFromWarehouse(c.address);
+  const dist = distFromWarehouseCustomer(c);
   const noteCount = (c.notes||[]).length;
   return `
   <div class="order-card" data-action="open-customer" data-id="${c.id}">
@@ -1485,6 +1549,7 @@ function customerCardHtml(c){
 async function renderCustomerSearch(){
   const all = DB.customers.slice();
   all.sort((a,b)=>a.name.localeCompare(b.name,"ko"));
+  await ensureCustomersGeocoded(all); // 검색 목록에 나올 거래처들 좌표를 미리 한 번에 캐시해둠
   const listHtml = all.map(customerCardHtml).join("") || `<div class="empty">등록된 거래처가 없습니다.</div>`;
   return `
   <div class="screen">
@@ -1500,7 +1565,8 @@ async function renderCustomerSearch(){
 async function renderCustomerProfile(){
   const c = await getCustomer(state.selectedCustomerId);
   if(!c){ state.view="customer-search"; return renderCustomerSearch(); }
-  const dist = distFromWarehouse(c.address);
+  await ensureCustomersGeocoded([c]);
+  const dist = distFromWarehouseCustomer(c);
   const notesHtml = renderNotesList(c.notes);
 
   return `
@@ -1620,13 +1686,17 @@ async function renderOperationsMap(drivers, ordersForDate){
   let pins = `<circle cx="${wh.x}" cy="${wh.y}" r="7" fill="var(--navy)"></circle>
     <text x="${wh.x}" y="${wh.y-11}" font-size="10" fill="var(--navy-ink)" text-anchor="middle" font-weight="700">창고</text>`;
 
+  // 지도에 나올 거래처들 좌표를 미리 한 번에 캐시해둔다 (카카오 지오코딩 우선, 실패 시 구 단위 대체)
+  const mapCustomers = ordersForDate.map(o=>DB.customers.find(x=>x.id===o.customerId)).filter(Boolean);
+  await ensureCustomersGeocoded(mapCustomers);
+
   for(const d of drivers){
     const myOrders = ordersForDate.filter(o=>(o.driverIds||[]).includes(d.id));
     const cur = myOrders.find(o=>o.status==="배송중") || myOrders.find(o=>o.status==="대기");
     let x,y;
     if(cur){
       const c = DB.customers.find(x=>x.id===cur.customerId);
-      const ll = c ? districtLatLng(c.address) : null;
+      const ll = c ? (typeof c.lat==="number" && typeof c.lng==="number" ? {lat:c.lat,lng:c.lng} : districtLatLng(c.address)) : null;
       const p = ll ? projectToMap(ll.lat, ll.lng, w, h) : wh;
       x=p.x; y=p.y;
     } else { x=wh.x; y=wh.y; }
