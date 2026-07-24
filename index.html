@@ -220,7 +220,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v54-20260723-customersync"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v55-20260724-noautoreseed"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -558,6 +558,13 @@ async function saveSheet(_name){
 async function seedIfNeeded(){
   await loadAllSheets();
   if(DB.orders.length){ return; } // 이미 데이터가 있으면 시딩 건너뜀
+  // 실제 배포(구글시트가 연동된 상태)에서 주문이 0건인 건 "완전히 새로 시작하는 것"이
+  // 아니라, 그냥 아직 오늘 배송이 없거나 일시적으로 데이터를 못 받아온 것일 수 있다.
+  // 이 경우에 데모 데이터를 만들어버리면(예전엔 이걸 원격에도 자동으로 반영해서 실제
+  // 운영 시트를 덮어쓰는 사고가 있었다) 오히려 위험하므로, 구글시트가 실제로 연동된
+  // 상태에서는 데모 시드를 만들지 않는다. 클로드 안(미리보기/테스트) 이거나 애초에
+  // 구글시트 연동 자체가 안 되어 있을 때만 데모 데이터를 보여준다.
+  if(!HAS_CLAUDE_STORAGE && DB.config.gsheetUrl){ return; }
 
   DB.users = [
     {id:"kim01", pw:"1234", role:"driver", name:"김민준", position:"주임", team:"배송1팀", vehicleNo:"12가3456", homeAddress:"서울 강동구 천호대로 200"},
@@ -619,9 +626,12 @@ async function seedIfNeeded(){
   ];
 
   await saveSheet();
-  // 최초 시드는 완전히 새로 시작하는 것이므로(이 시점엔 서버에도 데이터가 없다고 가정),
-  // 각 테이블을 통째로 반영해도 안전하다. 평소 운영 중에는 이 방식을 쓰지 않는다.
-  for(const name of SHEET_NAMES) await pushFullReplaceSheet(name, DB[name]);
+  // 주의: 예전엔 여기서 시드 데이터를 구글시트에도 자동으로 통째로 반영했는데, 이게 큰
+  // 사고를 냈다 — 어떤 기기에서 네트워크 문제 등으로 원격 데이터를 못 받아오면 앱이
+  // "완전히 새로 시작하는 것"으로 착각해서 데모 데이터로 실제 운영 시트를 덮어써버렸다.
+  // 그래서 시드는 이제 이 기기의 로컬 저장소에만 남기고, 절대 원격 구글시트를 자동으로
+  // 건드리지 않는다. 진짜로 새 구글시트를 처음 세팅해야 하면, 관리자가 직접 "구글시트
+  // 연동 설정" 화면에서 수동으로 내보내기를 눌러야 한다.
 }
 
 /* ---------------- app state ---------------- */
