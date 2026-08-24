@@ -208,10 +208,19 @@ a.plain{color:inherit;text-decoration:none;}
 .status-chip.sel{border-color:var(--accent);color:var(--accent-ink);background:var(--accent-bg);}
 .hairline-btn{background:none;border:none;color:var(--accent-ink);font-weight:700;font-size:12.5px;padding:4px 0;}
 .loadbar-mini{font-size:10.5px;color:var(--text-faint);margin-top:2px;}
+.boot-loading{display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;gap:14px;background:var(--bg);}
+.boot-spinner{width:36px;height:36px;border-radius:50%;border:4px solid var(--line-strong);border-top-color:var(--accent);animation:boot-spin 0.8s linear infinite;}
+@keyframes boot-spin{to{transform:rotate(360deg);}}
+.boot-loading-text{font-size:13px;color:var(--text-mute);font-weight:600;}
 </style>
 </head>
 <body>
-<div id="root"></div>
+<div id="root">
+  <div class="boot-loading">
+    <div class="boot-spinner"></div>
+    <div class="boot-loading-text">불러오는 중...</div>
+  </div>
+</div>
 
 <script>
 /* =========================================================================
@@ -220,7 +229,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v56-20260724-requiredvehicle"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v57-20260724-bootloading"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
