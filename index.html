@@ -220,7 +220,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v55-20260724-noautoreseed"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v56-20260724-requiredvehicle"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -815,6 +815,13 @@ async function deleteItem(id){
 async function doLogin(id, pw, vehicleOverride){
   const u = await getUser(id);
   if(!u || (u.pw??"").toString().trim()!==(pw??"").toString().trim()){ showToast("아이디 또는 비밀번호가 일치하지 않습니다."); return; }
+  // 기사 계정은 오늘 실제로 탈 차량을 매번 직접 선택하게 한다. 예전엔 선택을 안 하면
+  // 계정에 지정된 고정 차량으로 조용히 넘어갔는데, 실제로는 사람과 차량이 매번 랜덤으로
+  // 배정되는 경우가 많아서 이 "조용한 기본값"이 계속 잘못된 매칭을 만들고 있었다.
+  if((u.role??"").toString().trim()==="driver" && !vehicleOverride){
+    showToast("오늘 탑승하실 차량을 선택해주세요.");
+    return;
+  }
   state.currentUser = { ...u };
   if(vehicleOverride && (u.role??"").toString().trim()==="driver"){
     state.currentUser.vehicleNo = vehicleOverride;
@@ -1303,9 +1310,9 @@ function renderLogin(){
     <div class="login-box">
       <div class="field"><label>아이디</label><input id="in-id" type="text" placeholder="예: kim01" autocomplete="off"/></div>
       <div class="field"><label>비밀번호</label><input id="in-pw" type="password" placeholder="비밀번호" autocomplete="off"/></div>
-      <div class="field"><label>차량번호 선택 <span class="tiny faint">(선택 시 계정에 지정된 차량 대신 사용)</span></label>
+      <div class="field"><label>오늘 탑승할 차량 <span class="tiny faint">(기사 계정은 필수 선택입니다)</span></label>
         <select id="in-vehicle">
-          <option value="">담당 차량 자동 인식</option>
+          <option value="">차량을 선택해주세요</option>
           ${DB.vehicles.map(v=>`<option value="${escapeHtml(v.no)}">${escapeHtml(v.no)} · ${escapeHtml(v.type)}</option>`).join("")}
         </select>
       </div>
