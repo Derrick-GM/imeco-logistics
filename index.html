@@ -229,7 +229,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v58-20260724-notesafety"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v59-20260724-packsummary"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -1464,7 +1464,17 @@ async function renderHome(){
   let listHtml = "";
   for(const [cat, items] of Object.entries(cats)){
     const icon = cat.includes("2L") ? "🧴" : cat.includes("미네랄") ? "🚰" : "💧";
-    listHtml += `<div class="cat-header"><div class="cat-icon">${icon}</div><div class="cat-name">${escapeHtml(cat)}</div><div class="cat-count">${items.length}건</div></div>`;
+    // 상차할 때 품목별로 몇 팩을 실어야 하는지 한눈에 보이게, 건수 옆에 팩수 합계도 표시한다.
+    // 나(이 기사)에게만 배정된(공동배정 아닌) 건들의 합은 검은색으로 "확정 수량"을 보여주고,
+    // 공동배정(동승) 건까지 포함한 전체 합은 빨간색 괄호로 따로 보여준다 — 동승 건은
+    // 다른 기사가 먼저 처리할 수도 있어서, 실제로 실을 수량이 둘 사이 어딘가일 수 있음을
+    // 구분해서 알려주기 위함이다.
+    const myOnlyPacks = items.filter(o=>(o.driverIds||[]).length<=1).reduce((s,o)=>s+parseQtyNumber(o.qty),0);
+    const totalPacks = items.reduce((s,o)=>s+parseQtyNumber(o.qty),0);
+    const packsLabel = totalPacks!==myOnlyPacks
+      ? `${myOnlyPacks}팩<span style="color:var(--danger);">(${totalPacks}팩)</span>`
+      : `${myOnlyPacks}팩`;
+    listHtml += `<div class="cat-header"><div class="cat-icon">${icon}</div><div class="cat-name">${escapeHtml(cat)}</div><div class="cat-count">${items.length}건 / ${packsLabel}</div></div>`;
     for(const o of items){
       const c = await getCustomer(o.customerId);
       if(!c) continue;
