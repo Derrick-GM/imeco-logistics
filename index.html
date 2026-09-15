@@ -229,7 +229,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v59-20260724-packsummary"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v60-20260724-fuelcalcfix"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -2654,12 +2654,20 @@ function setupFuelAutoCalc(){
   const price = document.getElementById("mo-fuel-price");
   const liters = document.getElementById("mo-fuel-liters");
   const amount = document.getElementById("mo-fuel-amount");
-  function calc(){
+  // 단가+금액을 입력하면 주유량이 자동 계산되고(요청하신 방식), 단가+주유량을 직접
+  // 입력하는 경우엔 금액이 자동 계산되도록 양쪽 다 지원한다. 어느 칸을 마지막으로
+  // 고쳤는지에 따라 나머지 한 칸이 계산되는 구조라, 두 입력 방식 다 자연스럽게 된다.
+  function calcLitersFromAmount(){
+    const p = parseFloat(price.value), a = parseFloat(amount.value);
+    if(p && a) liters.value = +(a/p).toFixed(2);
+  }
+  function calcAmountFromLiters(){
     const p = parseFloat(price.value), l = parseFloat(liters.value);
     if(p && l) amount.value = Math.round(p*l);
   }
-  if(price) price.oninput = calc;
-  if(liters) liters.oninput = calc;
+  if(price) price.oninput = calcLitersFromAmount;
+  if(amount) amount.oninput = calcLitersFromAmount;
+  if(liters) liters.oninput = calcAmountFromLiters;
 }
 
 /* live trip clock */
