@@ -229,7 +229,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v61-20260724-sourcenowarning"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v62-20260724-sourcestatusverify"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -962,8 +962,18 @@ async function setOrderStatus(orderId, status){
   // 완료 계열 상태가 되면 R열(납품완료일자)에 오늘 날짜도 같이 써주고, 완료가 취소되면 비운다.
   if(o.sourceNo){
     const sourceStatus = status==="완료" ? "배송완료" : status;
-    await pushSourceStatusUpdates([{no:o.sourceNo, status:sourceStatus, completedDate: isDoneStatus(status) ? todayStr() : ""}]);
-    showToast(isDoneStatus(status) ? `${status} 처리되었습니다. (원본 시트 반영됨)` : `상태가 '${status}'(으)로 변경되었습니다. (원본 시트 반영됨)`);
+    const pushResult = await pushSourceStatusUpdates([{no:o.sourceNo, status:sourceStatus, completedDate: isDoneStatus(status) ? todayStr() : ""}]);
+    const base = isDoneStatus(status) ? `${status} 처리되었습니다.` : `상태가 '${status}'(으)로 변경되었습니다.`;
+    if(pushResult.ok===true && (!pushResult.notFound || !pushResult.notFound.length)){
+      showToast(`${base} (원본 시트 반영됨)`);
+    } else if(pushResult.ok===true && pushResult.notFound && pushResult.notFound.length){
+      showToast(`${base} ⚠️ 원본 시트에서 No.(${pushResult.notFound.join(", ")})를 못 찾아서 시트 반영은 안 됐어요.`, 6000);
+    } else if(pushResult.ok===null){
+      showToast(`${base} (원본 시트 반영 결과를 확인 못했어요 — 응답을 못 읽음)`, 5000);
+    } else {
+      const detail = pushResult.error ? `: ${pushResult.error}` : "";
+      showToast(`${base} ⚠️ 원본 시트 반영 실패${detail}`, 6000);
+    }
   } else {
     // No. 값이 없는 오래된 건은 원본 시트 반영 자체가 불가능하다 — 조용히 넘어가지 않고
     // 알려줘서 "눌렀는데 반응이 없다"로 헷갈리지 않게 한다.
@@ -1095,17 +1105,34 @@ async function gsheetFetchPush(){
 // 던지지 않고 조용히 넘어간다 — 앱 내부 상태(order.status)는 이미 별도로 반영돼 있어서,
 // 이 함수가 실패해도 기사 업무 자체는 막히지 않고 "원본 시트 표시만" 다음 동기화 때까지 밀리는 정도다.
 async function pushSourceStatusUpdates(updates){
-  if(!updates || !updates.length) return;
+  if(!updates || !updates.length) return { ok:false, reason:"no-updates" };
   const url = DB.config.gsheetUrl;
-  if(!url) return;
+  if(!url) return { ok:false, reason:"no-url" };
   try{
-    await fetchWithTimeout(url, {
+    const res = await fetchWithTimeout(url, {
       method:"POST",
       headers:{ "Content-Type":"text/plain;charset=utf-8" },
       body: JSON.stringify({ action:"updateSourceStatus", updates }),
     }, 15000);
+    if(!res.ok) return { ok:false, reason:"http-error", status:res.status };
+    // 예전엔 응답을 읽지 않고 요청만 보내면 무조건 "성공"으로 취급했는데, 그러면
+    // Apps Script 쪽에서 헤더를 못 찾는 등 실제로는 실패해도 조용히 넘어가서
+    // 사용자가 "반영됐다"고 오해하게 됐다. 이제 실제 응답 내용을 확인한다.
+    let data = null;
+    try{ data = await res.json(); }
+    catch(e){ return { ok:null, reason:"unreadable-response" }; } // 응답 자체를 못 읽음(교차출처 등) — 성공/실패 불확실
+    if(data && data.ok===false){
+      console.warn("원본 시트 배송 상태 반영 실패:", data.error);
+      return { ok:false, reason:"server-error", error:data.error };
+    }
+    if(data && data.notFound && data.notFound.length){
+      console.warn("원본 시트에서 못 찾은 No.:", data.notFound);
+      return { ok:true, notFound:data.notFound };
+    }
+    return { ok:true };
   }catch(e){
-    console.warn("원본 시트 배송 상태 반영 요청의 응답을 읽지 못했습니다(교차 출처라 정상일 수 있음):", e.message);
+    console.warn("원본 시트 배송 상태 반영 요청 실패:", e.message);
+    return { ok:false, reason:"network-error", error:e.message };
   }
 }
 // 앱 데이터(orders/customers/... ) 시트에서 id 기준으로 레코드 하나 이상을 콕 집어 반영한다.
