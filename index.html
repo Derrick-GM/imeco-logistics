@@ -229,7 +229,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v60-20260724-fuelcalcfix"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v61-20260724-sourcenowarning"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -963,8 +963,12 @@ async function setOrderStatus(orderId, status){
   if(o.sourceNo){
     const sourceStatus = status==="완료" ? "배송완료" : status;
     await pushSourceStatusUpdates([{no:o.sourceNo, status:sourceStatus, completedDate: isDoneStatus(status) ? todayStr() : ""}]);
+    showToast(isDoneStatus(status) ? `${status} 처리되었습니다. (원본 시트 반영됨)` : `상태가 '${status}'(으)로 변경되었습니다. (원본 시트 반영됨)`);
+  } else {
+    // No. 값이 없는 오래된 건은 원본 시트 반영 자체가 불가능하다 — 조용히 넘어가지 않고
+    // 알려줘서 "눌렀는데 반응이 없다"로 헷갈리지 않게 한다.
+    showToast(`${isDoneStatus(status)?status+" 처리되었습니다":"상태가 변경되었습니다"}. ⚠️ 이 건은 원본 시트 행 번호(No.)가 없어서 시트에는 반영되지 않았어요 — 앱 안에서만 반영된 상태입니다.`, 6000);
   }
-  showToast(isDoneStatus(status) ? `${status} 처리되었습니다.` : `상태가 '${status}'(으)로 변경되었습니다.`);
   render();
 }
 // 구글시트 한 셀에 들어갈 수 있는 글자 수 한도(약 5만자)에 안전 여유를 두고 잡은 기준.
