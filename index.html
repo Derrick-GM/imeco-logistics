@@ -229,7 +229,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v63-20260724-sourcenocorrect"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v64-20260929-dedupeorders"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -1912,6 +1912,7 @@ async function renderAdmin(){
       </div>
       <button class="btn btn-danger btn-sm" style="width:100%;" data-action="reset-orders">⚠️ 배송 데이터 초기화 (테스트 중 꼬인 데이터 정리용)</button>
       <button class="btn btn-ghost btn-sm" style="width:100%;" data-action="reset-geocode-cache">📍 거래처 위치 캐시 초기화 (거리계산 다시 하기)</button>
+      <button class="btn btn-ghost btn-sm" style="width:100%;" data-action="dedupe-orders">🧹 중복 배송건 정리 (완전히 같은 건 자동 병합)</button>
       <div class="card small" style="margin-top:4px;">
         <div class="bold tiny faint" style="margin-bottom:6px;">🧪 주소 지오코딩 테스트 (진단용)</div>
         <input id="geo-test-address" type="text" placeholder="테스트할 주소 입력" style="width:100%;padding:8px 10px;border-radius:8px;border:1.5px solid var(--line-strong);font-size:13px;margin-bottom:6px;"/>
@@ -2421,6 +2422,44 @@ function bindGlobal(){
       await saveSheet();
       await pushUpsertRecords("customers", DB.customers);
       showToast("위치 캐시를 초기화했습니다. 배송 리스트나 거래처 화면을 열면 자동으로 다시 계산됩니다.");
+      render();
+    }; }
+    if(action==="dedupe-orders"){ el.onclick = async ()=>{
+      // 거래처+품목+수량+납품예정일+상태+완료일시가 전부 완전히 똑같은 주문들은 진짜
+      // 같은 배송건이 예전(특히 No. 기준 식별자 도입 전) 로직 때문에 중복 생성된 것으로
+      // 본다. 하나만 남기고 나머지는 지우되, 서로 다른 담당자(driverIds)나 No. 값이
+      // 있으면 잃어버리지 않게 남기는 쪽에 합쳐준다.
+      const groups = new Map();
+      DB.orders.forEach(o=>{
+        const key = [o.customerId, o.category, o.qty, o.dueDate, o.status, o.completedDate||""].join("|");
+        if(!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(o);
+      });
+      const toDeleteIds = [];
+      const toKeepChanged = [];
+      let groupsAffected = 0;
+      for(const group of groups.values()){
+        if(group.length<2) continue;
+        groupsAffected++;
+        // 남길 것: No. 값이 있는 것 우선, 없으면 첫 번째
+        const keep = group.find(o=>o.sourceNo) || group[0];
+        const dupes = group.filter(o=>o!==keep);
+        // 중복들이 갖고 있던 담당자/No. 값을 남기는 쪽으로 합쳐서 잃어버리지 않게 한다.
+        let changed = false;
+        const mergedDriverIds = new Set(keep.driverIds||[]);
+        dupes.forEach(d=>{ (d.driverIds||[]).forEach(id=>mergedDriverIds.add(id)); });
+        if(mergedDriverIds.size !== (keep.driverIds||[]).length){ keep.driverIds = [...mergedDriverIds]; changed = true; }
+        if(!keep.sourceNo){ const withNo = dupes.find(d=>d.sourceNo); if(withNo){ keep.sourceNo = withNo.sourceNo; changed = true; } }
+        if(changed) toKeepChanged.push(keep);
+        dupes.forEach(d=>toDeleteIds.push(d.id));
+      }
+      if(!toDeleteIds.length){ showToast("중복된 배송건을 찾지 못했습니다."); return; }
+      if(!confirm(`완전히 같은 배송건 ${groupsAffected}그룹, 총 ${toDeleteIds.length}건의 중복을 정리할까요?\n\n각 그룹당 하나만 남기고 나머지는 삭제됩니다. 담당자 배정은 남는 건으로 합쳐집니다.`)) return;
+      DB.orders = DB.orders.filter(o=>!toDeleteIds.includes(o.id));
+      await saveSheet();
+      if(toKeepChanged.length) await pushUpsertRecords("orders", toKeepChanged);
+      await pushDeleteRecords("orders", toDeleteIds);
+      showToast(`중복 배송건 ${toDeleteIds.length}건을 정리했습니다 (${groupsAffected}그룹).`);
       render();
     }; }
     if(action==="test-geocode"){ el.onclick = async ()=>{
