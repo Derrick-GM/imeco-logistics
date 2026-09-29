@@ -229,7 +229,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v62-20260724-sourcestatusverify"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v63-20260724-sourcenocorrect"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -1305,7 +1305,16 @@ async function autoSyncTodayOrders(){
       if(existing.totalWeightKg!==newWeight){ existing.totalWeightKg = newWeight; changed=true; }
       if(existing.sourceKey!==sourceKey){ existing.sourceKey = sourceKey; } // 참고용 키도 최신 내용 기준으로 갱신
       if(changed){ updated++; touchedOrders.push(existing); }
-      if(!existing.sourceNo && sourceNo){ existing.sourceNo = sourceNo; backfilled++; existingBySourceNo.set(sourceNo, existing); if(!touchedOrders.includes(existing)) touchedOrders.push(existing); }
+      // No. 값이 비어있으면 채워넣고, 이미 있어도 지금 이 행의 실제 No.와 다르면
+      // (예: 예전에 sourceKey 매칭 시절 잘못 저장된 값) 최신 값으로 바로잡는다.
+      // 예전엔 "비어있을 때만" 채웠어서, 한 번 잘못된 값이 박히면 영원히 안 고쳐지는
+      // 문제가 있었다 — 이래서 원본 시트 W/R열 반영이 계속 실패하는 사례가 있었다.
+      if(sourceNo && existing.sourceNo!==sourceNo){
+        if(!existing.sourceNo) backfilled++;
+        existing.sourceNo = sourceNo;
+        existingBySourceNo.set(sourceNo, existing);
+        if(!touchedOrders.includes(existing)) touchedOrders.push(existing);
+      }
       continue;
     }
     const primaryDriver = DB.users.find(u=>u.id===driverIds[0]);
@@ -2519,7 +2528,13 @@ function bindGlobal(){
           if(existing.totalWeightKg!==newWeight){ existing.totalWeightKg = newWeight; changed=true; }
           if(existing.sourceKey!==sourceKey) existing.sourceKey = sourceKey;
           if(changed){ updated++; touchedOrders.push(existing); } else dupSkipped++;
-          if(!existing.sourceNo && sourceNo){ existing.sourceNo = sourceNo; existingBySourceNo.set(sourceNo, existing); if(!touchedOrders.includes(existing)) touchedOrders.push(existing); }
+          // No. 값이 비어있으면 채워넣고, 이미 있어도 실제 값과 다르면 최신 값으로 바로잡는다
+          // (예전엔 비어있을 때만 채워서 한 번 잘못된 값이 박히면 영원히 안 고쳐졌다).
+          if(sourceNo && existing.sourceNo!==sourceNo){
+            existing.sourceNo = sourceNo;
+            existingBySourceNo.set(sourceNo, existing);
+            if(!touchedOrders.includes(existing)) touchedOrders.push(existing);
+          }
           continue;
         }
         const order = {
