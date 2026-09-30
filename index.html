@@ -229,7 +229,7 @@ a.plain{color:inherit;text-decoration:none;}
    sheets: user / vehicle / customer / order / trip / fuel / maint / meta
    ========================================================================= */
 
-const APP_BUILD = "v65-20260929-dedupelooser"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
+const APP_BUILD = "v66-20260929-starttripverify"; // 화면 하단에 표시됨 - 캐시로 예전 버전이 떠 있는지 확인용
 const WAREHOUSE = { name:"본사 창고", address:"경기도 하남시 초광로67번길 73", lat:37.5393, lng:127.2148 };
 
 // 대략적인 지역 중심좌표 기반 참고용 직선거리 계산(주소→행정구 매칭). 실제 도로거리는 카카오맵 앱 연동으로 안내.
@@ -927,11 +927,23 @@ async function startTrip(){
   // 원본 발주요청서 시트의 W열(배송 상태)에도 "배송중"으로 반영 (No. 값이 있는 건만 가능)
   const sourceUpdates = toStart.filter(o=>o.sourceNo).map(o=>({no:o.sourceNo, status:"배송중"}));
   const noSourceNoCount = toStart.length - sourceUpdates.length;
-  if(sourceUpdates.length) await pushSourceStatusUpdates(sourceUpdates);
+  let sheetMsg = "";
+  if(sourceUpdates.length){
+    const pushResult = await pushSourceStatusUpdates(sourceUpdates);
+    if(pushResult.ok===true && (!pushResult.notFound || !pushResult.notFound.length)){
+      sheetMsg = " · 원본시트 반영됨";
+    } else if(pushResult.ok===true && pushResult.notFound && pushResult.notFound.length){
+      sheetMsg = ` · ⚠️ 원본시트에서 No.(${pushResult.notFound.join(", ")}) 못 찾음`;
+    } else if(pushResult.ok===null){
+      sheetMsg = " · 원본시트 반영 결과 확인 못함";
+    } else {
+      sheetMsg = ` · ⚠️ 원본시트 반영 실패${pushResult.error?`: ${pushResult.error}`:""}`;
+    }
+  }
   await checkMaintAlerts(u);
-  let msg = toStart.length ? `🚚 운행을 시작합니다. (대기중이던 ${toStart.length}건 → 배송중으로 일괄 전환)` : "🚚 운행을 시작합니다.";
+  let msg = toStart.length ? `🚚 운행을 시작합니다. (대기중이던 ${toStart.length}건 → 배송중으로 일괄 전환)${sheetMsg}` : "🚚 운행을 시작합니다.";
   if(toStart.length && noSourceNoCount>0) msg += ` · 원본시트 미반영 ${noSourceNoCount}건(No.값 없음)`;
-  showToast(msg);
+  showToast(msg, 6000);
   render();
 }
 async function endTripWithOdo(endOdo){
